@@ -1279,7 +1279,7 @@ fn attempt(
         _ => return failed(ran.failure, rerouted),
     };
     // Repair HLS TS files that may have fake image headers at segment boundaries
-    let video = match repair_hls_if_needed(&video, progress, &info) {
+    let video = match repair_hls_if_needed(&video, progress, ours) {
         Ok(path) => path,
         Err(e) => return failed(e, rerouted),
     };
@@ -1363,8 +1363,33 @@ fn note(progress: &Mutex<Progress>, text: String) {
 fn repair_hls_if_needed(
     video: &Path,
     progress: &Mutex<Progress>,
-    info: &serde_json::Value,
+    ours: &[String],
 ) -> Result<PathBuf, String> {
+    // On ffmpeg < 9 ffprobe reads the joined pieces as `png_pipe`, so yt-dlp skips its fixup
+    // and leaves the raw PNG+TS join under the final `.mp4` name: no `.ts` exists yet. Give
+    // such a file its real name first (the repaired MP4 then takes the original name back).
+    let renamed;
+    let video = if matches!(
+        video.extension().and_then(|e| e.to_str()),
+        Some("mp4" | "m4a")
+    ) && {
+        let mut head = Vec::with_capacity(8192);
+        std::fs::File::open(video)
+            .and_then(|f| {
+                use std::io::Read;
+                f.take(8192).read_to_end(&mut head)
+            })
+            .is_ok()
+            && content_ext(&head) == Some("ts")
+    } && !video.with_extension("ts").exists()
+        && std::fs::rename(video, video.with_extension("ts")).is_ok()
+    {
+        renamed = video.with_extension("ts");
+        renamed.as_path()
+    } else {
+        video
+    };
+    
     // Look for a TS file to repair: either the video itself or a .ts with the same stem
     let ts_file = if video.extension().and_then(|e| e.to_str()) == Some("ts") {
         Some(video.to_path_buf())
@@ -1417,7 +1442,14 @@ fn repair_hls_if_needed(
     
     // Now try to remux to MP4 using ffmpeg with -f mpegts
     // (works on ffmpeg 7/8, not just 9)
-    let ffmpeg = find_ffmpeg_from_info(info);
+    // The ffmpeg MDM gave yt-dlp (Helpers, MDM's own, Homebrew's even when PATH lacks it).
+    let ffmpeg = ours
+        .iter()
+        .position(|a| a == "--ffmpeg-location")
+        .and_then(|i| ours.get(i + 1))
+        .map(|dir| Path::new(dir).join(format!("ffmpeg{}", std::env::consts::EXE_SUFFIX)))
+        .filter(|f| f.is_file())
+        .or_else(find_ffmpeg_from_path);
     
     if let Some(ffmpeg_path) = ffmpeg {
         let mp4_path = ts_path.with_extension("mp4");
@@ -1460,10 +1492,8 @@ fn repair_hls_if_needed(
     }
 }
 
-/// Find ffmpeg path from yt-dlp's info JSON.
-fn find_ffmpeg_from_info(_info: &serde_json::Value) -> Option<PathBuf> {
-    // The info JSON doesn't typically contain ffmpeg path, so we'll look for it
-    // in common locations or use the one from PATH
+/// Find ffmpeg path from PATH or environment.
+fn find_ffmpeg_from_path() -> Option<PathBuf> {
     std::env::var("FFMPEG_PATH")
         .ok()
         .map(PathBuf::from)

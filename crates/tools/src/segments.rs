@@ -135,6 +135,9 @@ pub fn repair_ts_file(input: &std::path::Path, output: &std::path::Path) -> std:
     
     let mut pos = 0;
     let mut packets_written = 0;
+    // An unverified packet must directly follow the last written one, so a lone 0x47 in junk
+    // like the 'G' of '\x89PNG' isn't taken as a packet
+    let mut last_end = usize::MAX;
     
     while pos < data.len() {
         // Try to find a valid TS sync pattern at current position
@@ -147,15 +150,18 @@ pub fn repair_ts_file(input: &std::path::Path, output: &std::path::Path) -> std:
             output_file.write_all(&data[pos..pos + TS_PACKET_SIZE])?;
             packets_written += 1;
             pos += TS_PACKET_SIZE;
+            last_end = pos;
         } else if pos + TS_PACKET_SIZE <= data.len()
             && packets_written > 0
             && data[pos] == TS_SYNC
+            && pos == last_end
         {
             // We're continuing from valid packets and found a sync byte
             // (last packet of the file might not have 3 packets after it to verify)
             output_file.write_all(&data[pos..pos + TS_PACKET_SIZE])?;
             packets_written += 1;
             pos += TS_PACKET_SIZE;
+            last_end = pos;
         } else {
             // Not a valid sync pattern or at end - skip this byte (it's junk)
             pos += 1;
