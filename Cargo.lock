@@ -2228,6 +2228,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "env_home"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7f84e12ccf0a7ddc17a6c41c93326024c42920d7ee630d04950e6926645c0fe"
+
+[[package]]
 name = "epaint"
 version = "0.37.0"
 source = "git+https://github.com/anefzaoui/egui.git?rev=4ad60e5365470a6d12166a8075478f8aea44c9f8#4ad60e5365470a6d12166a8075478f8aea44c9f8"
@@ -4880,6 +4886,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "url",
+ "which",
  "win32job",
  "zip",
 ]
@@ -9424,6 +9431,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "which"
+version = "7.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24d643ce3fd3e5b54854602a080f34fb10ab75e0b813ee32d00ca2b44fa74762"
+dependencies = [
+ "either",
+ "env_home",
+ "rustix 1.1.6",
+ "winsafe",
+]
+
+[[package]]
 name = "wholesym"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10033,6 +10052,12 @@ dependencies = [
  "toml 1.1.8+spec-1.1.0",
  "version_check",
 ]
+
+[[package]]
+name = "winsafe"
+version = "0.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
 
 [[package]]
 name = "wit-bindgen"

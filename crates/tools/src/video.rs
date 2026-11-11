@@ -1278,6 +1278,12 @@ fn attempt(
         }
         _ => return failed(ran.failure, rerouted),
     };
+    // Repair HLS TS files that may have fake image headers at segment boundaries
+    let video = match repair_hls_if_needed(&video, progress, &info) {
+        Ok(path) => path,
+        Err(e) => return failed(e, rerouted),
+    };
+    
     let refused = subtitle_failures(&ran.warnings);
     if refused.is_empty() {
         return Attempt::Done(video, Vec::new(), quality);
@@ -1349,6 +1355,154 @@ fn note(progress: &Mutex<Progress>, text: String) {
         .unwrap()
         .events
         .push((std::time::SystemTime::now(), text));
+}
+
+/// Repair an HLS download's TS file if it has fake headers at segment boundaries.
+/// Checks for a .ts file (either the video itself or with --keep-video), repairs it if needed,
+/// and manually remuxes to MP4 with `-f mpegts` (which works on ffmpeg 7/8, not just 9).
+fn repair_hls_if_needed(
+    video: &Path,
+    progress: &Mutex<Progress>,
+    info: &serde_json::Value,
+) -> Result<PathBuf, String> {
+    // Look for a TS file to repair: either the video itself or a .ts with the same stem
+    let ts_file = if video.extension().and_then(|e| e.to_str()) == Some("ts") {
+        Some(video.to_path_buf())
+    } else {
+        // Look for intermediate .ts file from --keep-video
+        video.with_extension("ts").is_file().then(|| video.with_extension("ts"))
+    };
+    
+    let Some(ts_path) = ts_file else {
+        return Ok(video.to_path_buf());
+    };
+    
+    // Try to repair the TS file
+    let repaired = ts_path.with_file_name(format!(
+        "{}.repaired.ts",
+        ts_path.file_stem().unwrap_or_default().to_string_lossy()
+    ));
+    
+    let bytes_removed = match crate::segments::repair_ts_file(&ts_path, &repaired) {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = std::fs::remove_file(&repaired);
+            note(
+                progress,
+                format!("Could not repair TS file: {}; keeping original", e),
+            );
+            return Ok(video.to_path_buf());
+        }
+    };
+    
+    if bytes_removed == 0 {
+        // File was already clean
+        let _ = std::fs::remove_file(&repaired);
+        return Ok(video.to_path_buf());
+    }
+    
+    note(
+        progress,
+        format!(
+            "Repaired TS file: removed {} bytes of fake headers from segment boundaries",
+            bytes_removed
+        ),
+    );
+    
+    // Replace the original TS with the repaired one
+    if let Err(e) = std::fs::rename(&repaired, &ts_path) {
+        let _ = std::fs::remove_file(&repaired);
+        return Err(format!("Could not replace corrupted TS file: {e}"));
+    }
+    
+    // Now try to remux to MP4 using ffmpeg with -f mpegts
+    // (works on ffmpeg 7/8, not just 9)
+    let ffmpeg = find_ffmpeg_from_info(info);
+    
+    if let Some(ffmpeg_path) = ffmpeg {
+        let mp4_path = ts_path.with_extension("mp4");
+        
+        match remux_ts_to_mp4(&ts_path, &mp4_path, &ffmpeg_path, progress) {
+            Ok(()) => {
+                note(progress, "Remuxed repaired TS to MP4".into());
+                // Remove the TS file, keep the MP4
+                let _ = std::fs::remove_file(&ts_path);
+                
+                // If there was an old corrupted MP4, remove it
+                if video != mp4_path && video.extension().and_then(|e| e.to_str()) == Some("mp4") {
+                    let _ = std::fs::remove_file(video);
+                }
+                
+                Ok(mp4_path)
+            }
+            Err(e) => {
+                note(
+                    progress,
+                    format!("Could not remux to MP4 ({}); keeping TS file", e),
+                );
+                // Remove any partial MP4
+                let _ = std::fs::remove_file(&mp4_path);
+                
+                // Remove old corrupted MP4 if it exists
+                if video != ts_path && video.extension().and_then(|e| e.to_str()) == Some("mp4") {
+                    let _ = std::fs::remove_file(video);
+                }
+                
+                Ok(ts_path)
+            }
+        }
+    } else {
+        // No ffmpeg available, just keep the repaired TS
+        if video != ts_path && video.extension().and_then(|e| e.to_str()) == Some("mp4") {
+            let _ = std::fs::remove_file(video);
+        }
+        Ok(ts_path)
+    }
+}
+
+/// Find ffmpeg path from yt-dlp's info JSON.
+fn find_ffmpeg_from_info(_info: &serde_json::Value) -> Option<PathBuf> {
+    // The info JSON doesn't typically contain ffmpeg path, so we'll look for it
+    // in common locations or use the one from PATH
+    std::env::var("FFMPEG_PATH")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| which::which("ffmpeg").ok())
+}
+
+/// Remux a repaired TS file to MP4 using ffmpeg with -f mpegts.
+/// This forces ffmpeg to treat the input as MPEG-TS, which works on ffmpeg 7/8/9.
+fn remux_ts_to_mp4(
+    ts_path: &Path,
+    mp4_path: &Path,
+    ffmpeg: &Path,
+    _progress: &Mutex<Progress>,
+) -> Result<(), String> {
+    let output = std::process::Command::new(ffmpeg)
+        .args([
+            "-f", "mpegts",           // Force input format to mpegts
+            "-i", &ts_path.to_string_lossy(),
+            "-c", "copy",              // Copy streams without re-encoding
+            "-movflags", "+faststart", // Put moov atom at the start for streaming
+            "-y",                      // Overwrite output
+            &mp4_path.to_string_lossy(),
+        ])
+        .output()
+        .map_err(|e| format!("Could not run ffmpeg: {e}"))?;
+    
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr_summary = stderr
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.contains("Metadata"))
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("; ");
+        
+        Err(format!("ffmpeg remux failed: {}", stderr_summary))
+    }
 }
 
 /// A subtitle refusal in the log's words.
@@ -1459,7 +1613,7 @@ impl VideoJob {
         let with_subs = convert.is_none() && !subs.langs.is_empty();
         let mut ours: Vec<String> = vec![
             "-f".into(),
-            format,
+            format.clone(),
             "-o".into(),
             output.to_string_lossy().into_owned(),
             "--no-playlist".into(),
@@ -1475,6 +1629,13 @@ impl VideoJob {
             "--print".into(),
             QUALITY.into(),
         ];
+        
+        // For HLS streams, keep the intermediate TS file so we can repair fake headers
+        // before the final MP4 remux
+        let is_hls = format.contains("hls") || format.contains("m3u8");
+        if is_hls && ffmpeg.is_some() {
+            ours.push("--keep-video".into());
+        }
         ours.extend(pace_args(rate, fragments));
         // A subtitles-only second run, for the ones a site refuses (#68): the same output name.
         let mut retry_base: Vec<String> = vec![

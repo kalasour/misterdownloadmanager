@@ -117,6 +117,58 @@ pub fn strip_fake_header_owned(mut data: Vec<u8>) -> Vec<u8> {
     data
 }
 
+/// Repair a concatenated MPEG-TS file that has fake headers at segment boundaries.
+/// Walks through the file and removes any junk between valid TS packets, writing only
+/// valid packets (those starting with 0x47 at proper 188-byte boundaries) to the output.
+/// 
+/// Returns Ok(bytes_removed) if any junk was found and removed, Ok(0) if the file was
+/// already clean, or Err if the file couldn't be read/written or isn't a valid TS file.
+pub fn repair_ts_file(input: &std::path::Path, output: &std::path::Path) -> std::io::Result<usize> {
+    use std::io::Write;
+    
+    const TS_PACKET_SIZE: usize = 188;
+    const TS_SYNC: u8 = 0x47;
+    
+    // Read entire file (video segments are typically small enough)
+    let data = std::fs::read(input)?;
+    let mut output_file = std::fs::File::create(output)?;
+    
+    let mut pos = 0;
+    let mut packets_written = 0;
+    
+    while pos < data.len() {
+        // Try to find a valid TS sync pattern at current position
+        if pos + TS_PACKET_SIZE * 3 <= data.len()
+            && data[pos] == TS_SYNC
+            && data[pos + TS_PACKET_SIZE] == TS_SYNC
+            && data[pos + TS_PACKET_SIZE * 2] == TS_SYNC
+        {
+            // Found valid TS sync pattern - write this packet
+            output_file.write_all(&data[pos..pos + TS_PACKET_SIZE])?;
+            packets_written += 1;
+            pos += TS_PACKET_SIZE;
+        } else if pos + TS_PACKET_SIZE <= data.len()
+            && packets_written > 0
+            && data[pos] == TS_SYNC
+        {
+            // We're continuing from valid packets and found a sync byte
+            // (last packet of the file might not have 3 packets after it to verify)
+            output_file.write_all(&data[pos..pos + TS_PACKET_SIZE])?;
+            packets_written += 1;
+            pos += TS_PACKET_SIZE;
+        } else {
+            // Not a valid sync pattern or at end - skip this byte (it's junk)
+            pos += 1;
+        }
+    }
+    
+    output_file.flush()?;
+    
+    let bytes_written = packets_written * TS_PACKET_SIZE;
+    let bytes_removed = data.len() - bytes_written;
+    Ok(bytes_removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +266,122 @@ mod tests {
         
         let cleaned = strip_fake_header_owned(prefixed);
         assert_eq!(cleaned, ts_data);
+    }
+
+    #[test]
+    fn repairs_ts_file_with_fake_headers_at_segment_boundaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("corrupted.ts");
+        let output = dir.path().join("repaired.ts");
+        
+        // Create a "corrupted" TS file: 3 segments, each with a fake PNG header
+        let mut corrupted = Vec::new();
+        
+        for segment_idx in 0..3 {
+            // Fake header (70 bytes) - use a pattern that definitely won't match TS sync
+            // (avoid 0x47 entirely to prevent false positives)
+            corrupted.extend(vec![0x89, 0x50, 0x4E, 0x45, 0x0D, 0x0A, 0x1A, 0x0A]); // PNG-like but no 0x47
+            corrupted.extend(vec![0xFFu8; 62]); // Use 0xFF instead of 0 to avoid accidental sync
+            
+            // Valid TS packets (10 packets per segment)
+            for packet_idx in 0..10 {
+                let mut packet = vec![0x47]; // sync byte
+                // Make packets slightly different - use high bit set to avoid 0x47 accidentally
+                packet.push(0x80 | (segment_idx * 10 + packet_idx));
+                packet.extend(vec![0xAA; 186]); // Use 0xAA instead of 0
+                corrupted.extend(packet);
+            }
+        }
+        
+        std::fs::write(&input, &corrupted).unwrap();
+        
+        let bytes_removed = repair_ts_file(&input, &output).unwrap();
+        assert_eq!(bytes_removed, 70 * 3, "should remove 70 bytes per segment");
+        
+        // Verify the repaired file
+        let repaired = std::fs::read(&output).unwrap();
+        assert_eq!(repaired.len(), 188 * 30, "should have exactly 30 packets");
+        
+        // Verify every packet starts with sync byte at correct position
+        for i in 0..30 {
+            let offset = i * 188;
+            assert_eq!(
+                repaired[offset], 0x47,
+                "packet {} should start with sync byte",
+                i
+            );
+        }
+        
+        // Verify packet content is preserved  
+        assert_eq!(repaired[1], 0x80); // First segment, first packet
+        assert_eq!(repaired[188 + 1], 0x81); // First segment, second packet
+        assert_eq!(repaired[188 * 10 + 1], 0x8A); // Second segment, first packet
+        assert_eq!(repaired[188 * 20 + 1], 0x94); // Third segment, first packet
+    }
+
+    #[test]
+    fn repair_does_nothing_to_clean_ts_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("clean.ts");
+        let output = dir.path().join("output.ts");
+        
+        // Create a clean TS file
+        let mut clean = Vec::new();
+        for i in 0..20 {
+            let mut packet = vec![0x47];
+            packet.push(i);
+            packet.extend(vec![0; 186]);
+            clean.extend(packet);
+        }
+        
+        std::fs::write(&input, &clean).unwrap();
+        
+        let bytes_removed = repair_ts_file(&input, &output).unwrap();
+        assert_eq!(bytes_removed, 0, "clean file should have nothing removed");
+        
+        let repaired = std::fs::read(&output).unwrap();
+        assert_eq!(repaired, clean, "clean file should be unchanged");
+    }
+
+    #[test]
+    fn repair_handles_junk_in_middle_of_stream() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("junk.ts");
+        let output = dir.path().join("clean.ts");
+        
+        let mut data = Vec::new();
+        
+        // First 5 clean packets
+        for i in 0..5 {
+            let mut packet = vec![0x47];
+            packet.push(i);
+            packet.extend(vec![0; 186]);
+            data.extend(packet);
+        }
+        
+        // 100 bytes of junk
+        data.extend(vec![0xFF; 100]);
+        
+        // Next 5 clean packets
+        for i in 5..10 {
+            let mut packet = vec![0x47];
+            packet.push(i);
+            packet.extend(vec![0; 186]);
+            data.extend(packet);
+        }
+        
+        std::fs::write(&input, &data).unwrap();
+        
+        let bytes_removed = repair_ts_file(&input, &output).unwrap();
+        assert_eq!(bytes_removed, 100);
+        
+        let repaired = std::fs::read(&output).unwrap();
+        assert_eq!(repaired.len(), 188 * 10);
+        
+        // Verify all 10 packets are there with correct content
+        for i in 0..10 {
+            assert_eq!(repaired[i * 188], 0x47);
+            assert_eq!(repaired[i * 188 + 1], i as u8);
+        }
     }
 }

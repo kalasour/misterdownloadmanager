@@ -23,6 +23,7 @@ thiserror.workspace = true
 tokio.workspace = true
 url.workspace = true
 percent-encoding.workspace = true
+which = "7.0.0"
 zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
