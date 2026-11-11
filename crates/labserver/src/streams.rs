@@ -297,6 +297,111 @@ pub(crate) async fn hls_file(Path((name, file)): Path<(String, String)>) -> Resp
     }
 }
 
+/// Fake PNG header (8 bytes: signature) + padding to make it 70 bytes total
+fn fake_png_header() -> Vec<u8> {
+    let mut header = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]; // PNG signature
+    header.extend(vec![0u8; 62]); // pad to 70 bytes total
+    header
+}
+
+/// Fake JPEG header (SOI marker + APP0 marker start) + padding to make it 70 bytes total
+fn fake_jpeg_header() -> Vec<u8> {
+    let mut header = vec![0xFF, 0xD8, 0xFF, 0xE0]; // JPEG SOI + APP0 marker start
+    header.extend(vec![0u8; 66]); // pad to 70 bytes total
+    header
+}
+
+/// `/hls-png/{track}/index.m3u8` and `/hls-png/{track}/seg{i}.ts` - segments with fake PNG headers
+pub(crate) async fn hls_png_file(Path((name, file)): Path<(String, String)>) -> Response {
+    let Some((ti, t)) = track(&name) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if file == "index.m3u8" {
+        let mut s = format!(
+            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:{SEGMENT_SECS}\n\
+             #EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n"
+        );
+        for i in 0..SEGMENTS {
+            s += &format!("#EXTINF:{SEGMENT_SECS}.000,\nseg{i}.ts\n");
+        }
+        s += "#EXT-X-ENDLIST\n";
+        return text(M3U8, s);
+    }
+    match numbered(&file, "seg", ".ts") {
+        Some(i) if i < SEGMENTS => {
+            let mut prefixed = fake_png_header();
+            prefixed.extend(ts_segment(ti, i, t.segment_len));
+            // Serve as image/png to mimic the real-world scenario
+            bytes("image/png", prefixed)
+        }
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// `/hls-jpeg/{track}/index.m3u8` and `/hls-jpeg/{track}/seg{i}.ts` - segments with fake JPEG headers
+pub(crate) async fn hls_jpeg_file(Path((name, file)): Path<(String, String)>) -> Response {
+    let Some((ti, t)) = track(&name) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if file == "index.m3u8" {
+        let mut s = format!(
+            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:{SEGMENT_SECS}\n\
+             #EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n"
+        );
+        for i in 0..SEGMENTS {
+            s += &format!("#EXTINF:{SEGMENT_SECS}.000,\nseg{i}.ts\n");
+        }
+        s += "#EXT-X-ENDLIST\n";
+        return text(M3U8, s);
+    }
+    match numbered(&file, "seg", ".ts") {
+        Some(i) if i < SEGMENTS => {
+            let mut prefixed = fake_jpeg_header();
+            prefixed.extend(ts_segment(ti, i, t.segment_len));
+            // Serve as image/jpeg to mimic the real-world scenario
+            bytes("image/jpeg", prefixed)
+        }
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// Master playlists for fake-header streams
+pub(crate) async fn hls_png_master() -> Response {
+    let mut s = String::from(
+        "#EXTM3U\n#EXT-X-VERSION:3\n\
+         #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"English\",LANGUAGE=\"en\",\
+         DEFAULT=YES,AUTOSELECT=YES,URI=\"audio/index.m3u8\"\n",
+    );
+    for t in &TRACKS {
+        if let Some((w, h)) = t.video {
+            s += &format!(
+                "#EXT-X-STREAM-INF:BANDWIDTH={},RESOLUTION={w}x{h},\
+                 CODECS=\"avc1.4d401f,mp4a.40.2\",AUDIO=\"aud\"\n{}/index.m3u8\n",
+                t.bandwidth, t.name
+            );
+        }
+    }
+    text(M3U8, s)
+}
+
+pub(crate) async fn hls_jpeg_master() -> Response {
+    let mut s = String::from(
+        "#EXTM3U\n#EXT-X-VERSION:3\n\
+         #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"English\",LANGUAGE=\"en\",\
+         DEFAULT=YES,AUTOSELECT=YES,URI=\"audio/index.m3u8\"\n",
+    );
+    for t in &TRACKS {
+        if let Some((w, h)) = t.video {
+            s += &format!(
+                "#EXT-X-STREAM-INF:BANDWIDTH={},RESOLUTION={w}x{h},\
+                 CODECS=\"avc1.4d401f,mp4a.40.2\",AUDIO=\"aud\"\n{}/index.m3u8\n",
+                t.bandwidth, t.name
+            );
+        }
+    }
+    text(M3U8, s)
+}
+
 /// `N` of `{prefix}N{suffix}`.
 fn numbered(file: &str, prefix: &str, suffix: &str) -> Option<u32> {
     file.strip_prefix(prefix)?

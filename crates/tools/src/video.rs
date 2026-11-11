@@ -1072,6 +1072,10 @@ fn saved_by_name(ours: &[String]) -> Option<PathBuf> {
 /// raw AAC (ADTS frames, each piece led by an ID3 tag with its time): `aac`, which players open.
 /// A video's pieces are an MPEG transport stream: `ts`. A real MP4 (ffmpeg was there, or the
 /// format came as a file) is none of these.
+/// 
+/// Also detects TS streams that may have fake image headers prepended to segments (observed on
+/// TikTok CDN): if the file starts with junk but has valid TS sync patterns after skipping it,
+/// it's identified as TS.
 fn content_ext(head: &[u8]) -> Option<&'static str> {
     // ID3v2 tags first: a 10-byte header, then the tag's size in 7-bit bytes.
     let mut at = 0usize;
@@ -1091,6 +1095,19 @@ fn content_ext(head: &[u8]) -> Option<&'static str> {
     if at == 0 && head.len() > 376 && [0, 188, 376].iter().all(|&i| head[i] == 0x47) {
         return Some("ts");
     }
+    
+    // Check for TS with fake headers prepended (e.g., fake PNG/JPEG headers before TS data).
+    // Use the segments module to detect if there's valid TS after stripping junk.
+    if at == 0 {
+        let cleaned = crate::segments::strip_fake_header(head);
+        if cleaned.len() < head.len() && cleaned.len() > 376 {
+            // Data was stripped, check if the cleaned portion is valid TS
+            if [0, 188, 376].iter().all(|&i| cleaned.get(i) == Some(&0x47)) {
+                return Some("ts");
+            }
+        }
+    }
+    
     None
 }
 

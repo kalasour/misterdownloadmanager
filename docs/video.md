@@ -150,6 +150,7 @@ Some sites, YouTube among them, send each viewer to a nearby video server, somet
 - Sites change often, and a newer yt-dlp usually fixes it. MDM doesn't update yt-dlp on its own yet. To get the newest one: quit MDM (**Tasks → Exit**), delete the `tools\yt-dlp` folder in MDM's data folder (`%APPDATA%\misterdownloadmanager`, or the `data` folder of a portable copy), start MDM, open the video window and click **Install yt-dlp**.
 - Videos protected with DRM (most paid streaming services) can't be downloaded, and MDM doesn't try. The browser extension's [Media on this page](browser-integration.md#media-on-this-page) shows such a stream as **Protected** and doesn't send it.
 - A page whose video the window can't find: play the video in your browser, then use the extension's [Media on this page](browser-integration.md#media-on-this-page) to send the stream the page loaded.
+- **Video file is corrupted or won't play**: some sites disguise video segments as images (serving them as PNG or JPEG with fake headers). MDM automatically detects and handles these when possible. If a video downloads but won't play, check that it has the right extension: MDM renames files from `.mp4` to `.ts` when they're actually MPEG transport stream files. Players like VLC and MPV open `.ts` files directly.
 - Downloading may be against some sites' terms. Checking that is up to you.
 - Still stuck? Use **Help → Report a problem** and include the page address.
 
