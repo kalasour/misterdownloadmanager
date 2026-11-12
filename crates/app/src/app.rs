@@ -4401,6 +4401,8 @@ impl App {
                 selector: add.selector,
                 subs: add.subs,
             });
+            // The tab's page URL when the video is in an embedded iframe player.
+            item.source_page = add.context.source_page.clone();
             // The quality menu's look-up goes with this new download only, started now and while
             // fresh: one queued for later, or added on a duplicate question answered late,
             // starts with a look-up of its own (the links will have expired).

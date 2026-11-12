@@ -380,6 +380,10 @@ pub struct Item {
     /// A video from a page, downloaded by yt-dlp (its `url` is the page).
     #[serde(default)]
     pub video: Option<VideoSpec>,
+    /// The tab's page URL when `url` is an embedded iframe player (shown in Properties as
+    /// "Source page").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_page: Option<String>,
     /// A torrent or magnet (M15): its `url` is a magnet link, `dest` its folder or one file.
     #[serde(default)]
     pub torrent: Option<crate::torrents::TorrentSpec>,

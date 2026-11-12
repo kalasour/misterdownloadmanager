@@ -1816,13 +1816,15 @@ ext.contextMenus.onClicked.addListener(async (info, tab) => {
       const page = info.frameUrl || info.pageUrl;
       await mediaBack;
       const src = await streamFor({ tab, frameId: info.frameId || 0 });
+      const inFrame = info.pageUrl && info.pageUrl !== page;
       const reply = await native({
         video: true,
         explicit: true,
         url: page,
         ...(src ? { src } : {}),
         ...(title ? { title } : {}),
-        referrer: info.pageUrl && info.pageUrl !== page ? info.pageUrl : "",
+        referrer: inFrame ? info.pageUrl : "",
+        ...(inFrame ? { sourcePage: info.pageUrl } : {}),
         ...(await videoCookies(src || page, { incognito, storeId })),
         private: incognito,
       });
@@ -2030,6 +2032,12 @@ async function videoTarget(m, page, sender) {
   // video's), nor the page's title (the feed's).
   const post = !youtube && Boolean(named) && named !== page;
   const feed = !youtube && m.url === null;
+  // When the button runs in an embedded iframe (e.g., player.example/embed inside site.example/watch),
+  // use the tab's title instead of the iframe's, and send the tab URL as sourcePage.
+  const inFrame = sender.frameId !== 0 || (tab.url && page && tab.url !== page);
+  const useTabTitle = inFrame && !post && !feed;
+  const tabTitle = typeof tab.title === "string" ? tab.title.trim().slice(0, 300) : "";
+  const frameTitle = typeof m.title === "string" ? m.title.slice(0, 300) : "";
   // The video's own file (video.js leaves it out beside a post a big site's reader knows), or a
   // stream it plays, still goes as `src`, with the page for its Referer.
   const file = typeof m.src === "string" && /^https?:/i.test(m.src) ? m.src : "";
@@ -2039,8 +2047,10 @@ async function videoTarget(m, page, sender) {
   return {
     own,
     src,
-    title: typeof m.title === "string" && !post && !feed ? m.title.slice(0, 300) : "",
+    title: useTabTitle ? tabTitle : ((!post && !feed) ? frameTitle : ""),
     referrer: tab.url && tab.url !== own ? tab.url : "",
+    // When in a frame and tab URL differs from frame URL, send it as sourcePage
+    ...(inFrame && tab.url && tab.url !== own ? { sourcePage: tab.url } : {}),
     // The cookies of what yt-dlp is given (the app files them under its host): the stream's
     // own server may not be the page's, and the page's cookies are not for it.
     ...(await videoCookies(src || own, { incognito: tab.incognito, storeId: tab.cookieStoreId })),
@@ -2074,6 +2084,7 @@ async function videoLookup(m, page, sender) {
       ...(v.src ? { src: v.src } : {}),
       ...(v.title ? { title: v.title } : {}),
       ...(v.referrer ? { referrer: v.referrer } : {}),
+      ...(v.sourcePage ? { sourcePage: v.sourcePage } : {}),
       // The lookup is the window's and the container's it was asked from (the app gives its
       // pick to no other).
       ...(tab.cookieStoreId ? { storeId: tab.cookieStoreId } : {}),
@@ -2147,6 +2158,7 @@ async function pageMessage(m, sender) {
       ...(v.src ? { src: v.src } : {}),
       title: v.title,
       referrer: v.referrer,
+      ...(v.sourcePage ? { sourcePage: v.sourcePage } : {}),
       cookies: v.cookies,
       cookieJar: v.cookieJar,
       ...(tab.incognito ? { private: true } : {}),

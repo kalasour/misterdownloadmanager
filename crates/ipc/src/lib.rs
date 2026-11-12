@@ -106,6 +106,10 @@ pub struct Command {
     /// The title of the page the button was clicked on: a video yt-dlp knows only by its address
     /// is named by it.
     pub video_title: Option<String>,
+    /// The tab's page URL when `video_page` is an embedded iframe player. Used for naming the
+    /// download and shown in Properties.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_page: Option<String>,
     /// From the browser's quality menu over a video (the button's click): look this video up
     /// with yt-dlp, off the window, and answer at once with a token to ask about it
     /// ([`api::VideoLookupAnswer`], `pending`). The browser's request context (`referer`,
@@ -158,6 +162,10 @@ pub struct VideoLookup {
     /// The title of the page the button was clicked on: a video yt-dlp knows only by its address
     /// is named by it (as [`Command::video_title`]).
     pub title: Option<String>,
+    /// The tab's page URL when `address` is an embedded iframe player (e.g., player.example/embed
+    /// inside site.example/watch). Used for naming the download and shown in Properties.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "sourcePage")]
+    pub source_page: Option<String>,
     /// The browser's cookie store the page is in (Firefox's containers): a choice is only taken
     /// from the same one.
     pub store_id: Option<String>,
@@ -876,6 +884,7 @@ mod tests {
             video_lookup: Some(VideoLookup {
                 address: "https://cdn.test/v/master.m3u8".into(),
                 title: Some("A talk".into()),
+                source_page: None,
                 store_id: Some("firefox-container-1".into()),
             }),
             referer: Some("https://videos.test/watch".into()),
@@ -940,7 +949,67 @@ mod tests {
         let raw: Command =
             serde_json::from_str(r#"{"video_lookup":{"address":"https://x.test/w"}}"#).unwrap();
         let ask = raw.video_lookup.unwrap();
-        assert_eq!((ask.title, ask.store_id), (None, None));
+        assert_eq!((ask.title, ask.store_id, ask.source_page), (None, None, None));
+        // With source_page (embedded iframe video).
+        let with_source = Command {
+            video_lookup: Some(VideoLookup {
+                address: "https://player.example/embed/abc".into(),
+                title: Some("Tab Title".into()),
+                source_page: Some("https://site.example/watch/123".into()),
+                store_id: None,
+            }),
+            ..Default::default()
+        };
+        let back_source = back(&with_source);
+        assert_eq!(
+            back_source.video_lookup.unwrap().source_page.as_deref(),
+            Some("https://site.example/watch/123")
+        );
+        // Serde round-trip with camelCase (as the extension sends).
+        let raw_camel: Command = serde_json::from_str(
+            r#"{"video_lookup":{"address":"https://p.example/e","title":"T",
+                "sourcePage":"https://s.example/w"}}"#,
+        )
+        .unwrap();
+        let ask_camel = raw_camel.video_lookup.unwrap();
+        assert_eq!(ask_camel.title.as_deref(), Some("T"));
+        assert_eq!(
+            ask_camel.source_page.as_deref(),
+            Some("https://s.example/w")
+        );
+        // Without source_page: field is omitted when serialized.
+        let without_source = Command {
+            video_lookup: Some(VideoLookup {
+                address: "https://v.test/w".into(),
+                title: None,
+                source_page: None,
+                store_id: None,
+            }),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&without_source).unwrap();
+        assert!(!json.contains("sourcePage") && !json.contains("source_page"));
+        // Plain video command with source_page.
+        let video_cmd = Command {
+            video_page: Some("https://player.example/embed/abc".into()),
+            video_title: Some("Tab Title".into()),
+            source_page: Some("https://site.example/watch/123".into()),
+            ..Default::default()
+        };
+        let back_video = back(&video_cmd);
+        assert_eq!(
+            back_video.source_page.as_deref(),
+            Some("https://site.example/watch/123")
+        );
+        assert_eq!(back_video.video_title.as_deref(), Some("Tab Title"));
+        // Skip serializing when None (old peers are fine).
+        let no_source = Command {
+            video_page: Some("https://v.test/w".into()),
+            source_page: None,
+            ..Default::default()
+        };
+        let json_no_source = serde_json::to_string(&no_source).unwrap();
+        assert!(!json_no_source.contains("source_page"));
     }
 
     /// An app that doesn't answer a question in time says so (`timeout`), and the one asking

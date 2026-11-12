@@ -116,6 +116,8 @@ struct Message {
     src: Option<String>,
     /// The page's title (`video`).
     title: Option<String>,
+    /// The tab's page URL when `url` is an embedded iframe player (`video` and `video_lookup`).
+    source_page: Option<String>,
     /// The button's menu: keep it off this site (a host name).
     hide_site: Option<String>,
     /// The button's menu: open its settings in Options (`page`: the toolbar button's popup asks
@@ -142,7 +144,8 @@ struct Message {
 
 /// The quality menu's look-up: the video's page (as the button's click sends it), the video's
 /// own file or its stream's manifest when the page plays one (`src`), the page's title, the
-/// page's referrer, and the cookie store the tab is in (Firefox's containers).
+/// page's referrer, the tab's page URL when different from the video's page (embedded iframe),
+/// and the cookie store the tab is in (Firefox's containers).
 #[derive(Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 struct LookupAsk {
@@ -150,6 +153,7 @@ struct LookupAsk {
     src: Option<String>,
     title: Option<String>,
     referrer: Option<String>,
+    source_page: Option<String>,
     store_id: Option<String>,
 }
 
@@ -492,9 +496,15 @@ fn video_command(
         Some(_) => Some(m.url.clone()),
         None => m.referrer.clone().filter(|r| !r.is_empty()),
     };
+    let source_page = m
+        .source_page
+        .as_ref()
+        .filter(|s| s.starts_with("http://") || s.starts_with("https://"))
+        .cloned();
     Ok(mdm_ipc::Command {
         video_page: Some(src.unwrap_or_else(|| m.url.clone())),
         video_title: m.title.clone().filter(|t| !t.trim().is_empty()),
+        source_page,
         referer,
         cookies: m.cookies.clone().filter(|c| !c.is_empty()),
         cookie_jar: m.cookie_jar.clone(),
@@ -570,10 +580,12 @@ fn menu_command(
                 .map(str::trim)
                 .filter(|t| !t.is_empty())
                 .map(|t| t.chars().take(TITLE_MAX).collect());
+            let source_page = l.source_page.as_ref().filter(|s| web(s)).cloned();
             mdm_ipc::Command {
                 video_lookup: Some(mdm_ipc::VideoLookup {
                     address: src.unwrap_or_else(|| l.page.clone()),
                     title,
+                    source_page,
                     store_id: store(&l.store_id),
                 }),
                 referer,
@@ -1651,6 +1663,7 @@ mod tests {
             Some(mdm_ipc::VideoLookup {
                 address: "https://cdn.test/v/master.m3u8?sig=1".into(),
                 title: Some("A talk about download managers".into()),
+                source_page: None,
                 store_id: Some("firefox-container-2".into()),
             }),
             "the video's own stream, with its page's title"
@@ -1950,6 +1963,33 @@ mod tests {
         assert!(!private.contains("secret") && private.contains("private window"));
         assert!(private.starts_with("browser integration: a browser "));
         assert!(!lookup_line("", "https://x.test/\n", false, "a\nb").contains('\n'));
+    }
+
+    /// A lookup from an embed with sourcePage: the tab title is used, Referer stays the embed URL,
+    /// and source_page is the tab URL.
+    #[test]
+    fn lookup_from_embed_with_source_page() {
+        let rules = mdm_ipc::capture::CaptureRules::default();
+        let m: Message = serde_json::from_str(
+            r#"{"videoLookup":{"page":"https://player.example/embed/abc",
+                "src":"https://cdn.example/v/master.m3u8","title":"Video Title from Tab",
+                "referrer":"https://player.example/embed/abc","sourcePage":"https://site.example/watch/123"},
+                "userAgent":"UA","private":false}"#,
+        )
+        .unwrap();
+        let cmd = menu_command(MenuAsk::Lookup, &m, &rules, "Chrome").unwrap();
+        let lookup = cmd.video_lookup.unwrap();
+        assert_eq!(lookup.address, "https://cdn.example/v/master.m3u8");
+        assert_eq!(lookup.title.as_deref(), Some("Video Title from Tab"));
+        assert_eq!(
+            lookup.source_page.as_deref(),
+            Some("https://site.example/watch/123")
+        );
+        // Referer is the embed/player page (the stream server checks it).
+        assert_eq!(
+            cmd.referer.as_deref(),
+            Some("https://player.example/embed/abc")
+        );
     }
 
     #[test]

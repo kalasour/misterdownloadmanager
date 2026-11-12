@@ -525,6 +525,13 @@
             "null"
           ]
         },
+        "source_page": {
+          "description": "The tab's page URL when `video_page` is an embedded iframe player. Used for naming the\ndownload and shown in Properties.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "start_queue": {
           "default": false,
           "description": "`/s`: start the main queue.",
@@ -664,6 +671,13 @@
           "default": "",
           "description": "What yt-dlp looks up: the video's own file or its stream's manifest when the page plays\none, else the page.",
           "type": "string"
+        },
+        "sourcePage": {
+          "description": "The tab's page URL when `address` is an embedded iframe player (e.g., player.example/embed\ninside site.example/watch). Used for naming the download and shown in Properties.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "store_id": {
           "default": null,

@@ -320,17 +320,35 @@ impl Properties {
             editable,
             false,
         );
+        
+        // Source page: the tab's page URL when the video is in an embedded iframe player.
+        // Only shown for videos downloaded from embeds (hidden when empty).
+        let mut login_y = 336.0;
+        if let Some(source) = &item.source_page {
+            winui::etched_h(&p, o.x + 11.0, o.y + 323.0, 456.0);
+            // i18n: label before the tab's page URL (for embedded iframe videos)
+            text(
+                &p,
+                o.x + 11.0,
+                o.y + 341.0,
+                crate::i18n::t("Source page:"),
+                LIGHT_TEXT(),
+            );
+            fit(ui, 11.0, 362.0, source);
+            login_y = 383.0;
+        }
+        
         // i18n: noun: label before the user name
         winui::text_right(
             &p,
             o.x + 110.0,
-            o.y + 336.0,
+            o.y + login_y,
             crate::i18n::t("Login"),
             LIGHT_TEXT(),
         );
         winui::edit_light(
             ui,
-            r(o, 120.0, 321.0, 189.0, 21.0),
+            r(o, 120.0, login_y - 15.0, 189.0, 21.0),
             &mut self.login,
             editable,
             false,
@@ -338,18 +356,19 @@ impl Properties {
         winui::text_right(
             &p,
             o.x + 110.0,
-            o.y + 363.0,
+            o.y + login_y + 27.0,
             crate::i18n::t("Password"),
             LIGHT_TEXT(),
         );
         password(
             ui,
-            r(o, 120.0, 350.0, 189.0, 21.0),
+            r(o, 120.0, login_y + 14.0, 189.0, 21.0),
             &mut self.password,
             editable,
         );
         // Through a debrid account (#44), beside the login: unticked, downloaded directly. It
         // changes while the download isn't running or finished.
+        let checkbox_y = login_y - 7.0;
         if let Some(service) = self.route.service(&item.url) {
             let mut on = !self.direct;
             let caption = crate::i18n::fmt(
@@ -359,7 +378,7 @@ impl Properties {
             );
             winui::checkbox_light_until(
                 ui,
-                o + vec2(322.0, 329.0),
+                o + vec2(322.0, checkbox_y),
                 &mut on,
                 &caption,
                 editable,
@@ -367,7 +386,9 @@ impl Properties {
             );
             self.direct = !on;
         }
-        winui::etched_h(&p, o.x + 11.0, o.y + 378.0, 456.0);
+        let separator_y = login_y + 42.0;
+        winui::etched_h(&p, o.x + 11.0, o.y + separator_y, 456.0);
+        let last_try_y = separator_y + 18.0;
         if !complete {
             let last = item.last_try.clone().unwrap_or_default();
             let last_try = crate::i18n::fmt(
@@ -375,15 +396,16 @@ impl Properties {
                 crate::i18n::t("Last try  {last}"),
                 &[("last", &last)],
             );
-            fit(ui, 11.0, 396.0, &last_try);
+            fit(ui, 11.0, last_try_y, &last_try);
         }
         // The dialog's own error (a bad address) takes the Result line's place while it lasts.
+        let error_y = separator_y + 37.0;
         if let Some(e) = &self.error {
             winui::fit(
                 ui,
                 &p,
                 o.x + 11.0,
-                o.y + 415.0,
+                o.y + error_y,
                 e,
                 winui::ERROR(),
                 o.x + 250.0,
