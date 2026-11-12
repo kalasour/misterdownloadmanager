@@ -584,10 +584,13 @@ fn menu_command(
             mdm_ipc::Command {
                 video_lookup: Some(mdm_ipc::VideoLookup {
                     address: src.unwrap_or_else(|| l.page.clone()),
-                    title,
-                    source_page,
+                    title: title.clone(),
+                    source_page: source_page.clone(),
                     store_id: store(&l.store_id),
                 }),
+                // Top-level source_page for the quality menu's context: the item gets
+                // add.context.source_page on pick.
+                source_page,
                 referer,
                 cookies: m.cookies.clone().filter(|c| !c.is_empty()),
                 cookie_jar: m.cookie_jar.clone(),
@@ -1966,7 +1969,8 @@ mod tests {
     }
 
     /// A lookup from an embed with sourcePage: the tab title is used, Referer stays the embed URL,
-    /// and source_page is the tab URL.
+    /// and source_page is the tab URL (both in VideoLookup and at the top level for the quality
+    /// menu's context).
     #[test]
     fn lookup_from_embed_with_source_page() {
         let rules = mdm_ipc::capture::CaptureRules::default();
@@ -1983,6 +1987,11 @@ mod tests {
         assert_eq!(lookup.title.as_deref(), Some("Video Title from Tab"));
         assert_eq!(
             lookup.source_page.as_deref(),
+            Some("https://site.example/watch/123")
+        );
+        // Top-level source_page for the quality menu's context (item.context.source_page on pick).
+        assert_eq!(
+            cmd.source_page.as_deref(),
             Some("https://site.example/watch/123")
         );
         // Referer is the embed/player page (the stream server checks it).

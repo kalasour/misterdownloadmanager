@@ -1357,4 +1357,53 @@ mod tests {
         let p = l.pick(&pick(&job.token, 0, None), false, now).unwrap();
         assert!(video_add(p, &folder, None, true, &Subs::default()).is_none());
     }
+
+    /// A lookup from an embedded iframe (source_page set): the choice is added with source_page
+    /// in its context, for Properties to show and for naming (tab title, not iframe title).
+    #[test]
+    fn lookup_from_embed_includes_source_page() {
+        let mut l = Lookups::default();
+        let now = Instant::now();
+        let folder = PathBuf::from("downloads").join("Video");
+        
+        // Simulate quality menu lookup from an embed with source_page.
+        let ask = VideoLookup {
+            address: "https://player.example/embed/abc".into(),
+            title: Some("Tab Title from Site Page".into()),
+            source_page: Some("https://site.example/watch/123".into()),
+            store_id: None,
+        };
+        let cmd = Command {
+            video_lookup: Some(ask.clone()),
+            referer: Some("https://player.example/embed/abc".into()),
+            source_page: Some("https://site.example/watch/123".into()),
+            cookies: Some("a=1".into()),
+            ..Default::default()
+        };
+        
+        let job = l
+            .begin(&ask, &cmd, false, now)
+            .unwrap();
+        answered(&job, STREAM);
+        let p = l.pick(&pick(&job.token, 0, None), false, now).unwrap();
+        drop(job);
+        
+        let add = video_add(p, &folder, None, true, &Subs::default()).unwrap();
+        
+        // The download's context includes source_page from the top-level Command.
+        assert_eq!(
+            add.context.source_page.as_deref(),
+            Some("https://site.example/watch/123"),
+            "source_page flows through for Properties"
+        );
+        
+        // Named after the tab title (not iframe's "Embed").
+        assert_eq!(add.dest, folder.join("Tab Title from Site Page.mp4"));
+        
+        // Referer stays the embed/player page.
+        assert_eq!(
+            add.context.referer.as_deref(),
+            Some("https://player.example/embed/abc")
+        );
+    }
 }
